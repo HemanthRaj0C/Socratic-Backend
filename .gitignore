@@ -1,0 +1,4 @@
+/__pycache__/
+
+.env
+/socratic-ai-tutor-backend-firebase.json
