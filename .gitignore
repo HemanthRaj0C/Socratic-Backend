@@ -1,4 +1,6 @@
 /__pycache__/
 
 .env
+
+/G-Colab-Crentiatils.txt
 /socratic-ai-tutor-backend-firebase.json

@@ -6,6 +6,8 @@ from fastapi import FastAPI, Depends, HTTPException, Header
 from pydantic import BaseModel
 from typing import List, Dict
 from dotenv import load_dotenv
+from typing import Optional
+from uuid import uuid4 # To generate unique IDs for new conversations
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -13,13 +15,14 @@ from fastapi.middleware.cors import CORSMiddleware
 import firebase_config as fb
 import redis_cache
 
+from firebase_admin import firestore
+
 # Load environment variables (for NGROK_URL)
 load_dotenv()
 app = FastAPI()
 
 origins = [
     "http://localhost:3000",  # The default Next.js port
-    "http://localhost:3001",  # Your current Next.js port
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -39,8 +42,10 @@ class ChatMessage(BaseModel):
     role: str
     content: str
 
+# --- NEW Pydantic Models ---
 class ChatRequest(BaseModel):
     messages: List[ChatMessage]
+    conversation_id: Optional[str] = None # Frontend will tell us which chat to continue
 
 # Firebase Auth Dependency (same as before)
 async def get_current_user(authorization: str = Header(...)):
@@ -72,53 +77,87 @@ def get_ai_reply_from_colab(history: List[Dict[str, str]]) -> str:
         print(f"❌ Error calling AI model API: {e}")
         raise HTTPException(status_code=503, detail="The AI model service is unavailable.")
 
+# NEW ENDPOINT: Get a list of all conversations for a user
+@app.get("/conversations")
+async def get_conversations(user_id: str = Depends(get_current_user)):
+    """Fetches a list of all conversation titles and IDs for the logged-in user."""
+    try:
+        convos_ref = fb.db.collection('users').document(user_id).collection('conversations').order_by("createdAt", direction=firestore.Query.DESCENDING).stream()
+        
+        conversations = []
+        for convo in convos_ref:
+            convo_data = convo.to_dict()
+            conversations.append({
+                "id": convo.id,
+                "title": convo_data.get("title", "Untitled Chat"),
+                "createdAt": convo_data.get("createdAt")
+            })
+        return conversations
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
+# NEW ENDPOINT: Get the messages for a specific conversation
+@app.get("/conversations/{conversation_id}")
+async def get_conversation_by_id(conversation_id: str, user_id: str = Depends(get_current_user)):
+    """Fetches the full message history for a single conversation."""
+    try:
+        doc_ref = fb.db.collection('users').document(user_id).collection('conversations').document(conversation_id)
+        doc = doc_ref.get()
+        if doc.exists:
+            return {"messages": doc.to_dict().get("messages", [])}
+        else:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# MODIFIED ENDPOINT: The main chat logic
 @app.post("/chat")
 async def handle_chat(request: ChatRequest, user_id: str = Depends(get_current_user)):
-    """The main chat endpoint that orchestrates everything."""
+    """Handles an incoming message, either continuing an existing chat or starting a new one."""
     
-    print(f"💬 Chat request received for user: {user_id}")
-    print(f"🔗 AI Model URL configured as: {AI_MODEL_API_URL}")
-    
-    # 1. Get History (Cache-Aside Pattern)
-    history = redis_cache.get_chat_history(user_id)
-    if not history:
-        print(f"📂 No cache found, checking Firestore for user: {user_id}")
-        doc = fb.db.collection('chats').document(user_id).get()
-        history = doc.to_dict().get('messages', []) if doc.exists else [{"role": "system", "content": "You are a helpful Socratic tutor."}]
-        print(f"📚 Loaded {len(history)} messages from Firestore")
+    conversation_id = request.conversation_id
+    new_message = request.messages[0].dict() # Assuming frontend sends only the new message
+
+    # --- 1. Handle New vs. Existing Conversation ---
+    if not conversation_id:
+        # This is a new chat. Create a new conversation document.
+        conversation_id = str(uuid4())
+        history = [{"role": "system", "content": "You are a helpful Socratic tutor."}]
+        # Let's generate a title from the first message
+        first_message_content = new_message['content']
+        # You could even use a quick LLM call here to generate a better title
+        title = (first_message_content[:30] + '...') if len(first_message_content) > 30 else first_message_content
     else:
-        print(f"⚡ Loaded {len(history)} messages from Redis cache")
+        # This is an existing chat. Load its history.
+        # We'll use a simplified cache key for this example
+        history = redis_cache.get_chat_history(f"{user_id}:{conversation_id}")
+        if not history:
+            doc_ref = fb.db.collection('users').document(user_id).collection('conversations').document(conversation_id)
+            doc = doc_ref.get()
+            history = doc.to_dict().get('messages', []) if doc.exists else []
 
-    # 2. Update history with new message(s)
-    for msg in request.messages:
-        history.append(msg.dict())
-        print(f"➕ Added message: {msg.role} - {msg.content[:50]}...")
-    
-    print(f"📝 Sending history to AI: {len(history)} messages")
-
-    # 3. Call the AI Model
+    # 2. Add new user message and call AI
+    history.append(new_message)
     assistant_reply = get_ai_reply_from_colab(history)
-
-    # 4. Update history with AI reply
     history.append({"role": "assistant", "content": assistant_reply})
-    print(f"🤖 Added AI reply to history")
-
-    # 5. Update both storage systems
-    try:
-        # Update Redis cache
-        redis_cache.set_chat_history(user_id, history)
-        print(f"✅ Updated Redis cache with {len(history)} messages")
-        
-        # Update Firestore database
-        fb.db.collection('chats').document(user_id).set({'messages': history})
-        print(f"✅ Updated Firestore with {len(history)} messages")
-    except Exception as e:
-        print(f"⚠️ Error updating storage: {e}")
-        # Continue anyway - the response can still be sent
-
-    print(f"✅ Chat response sent successfully")
-    return {"reply": assistant_reply}
+    
+    # 3. Update databases
+    convo_doc_ref = fb.db.collection('users').document(user_id).collection('conversations').document(conversation_id)
+    
+    if not request.conversation_id: # If it was a new chat, set title and timestamp
+        convo_doc_ref.set({
+            'title': title,
+            'createdAt': firestore.SERVER_TIMESTAMP,
+            'messages': history
+        })
+    else: # Otherwise, just update the messages
+        convo_doc_ref.update({'messages': history})
+    
+    # Update cache
+    redis_cache.set_chat_history(f"{user_id}:{conversation_id}", history)
+    
+    # Return the reply AND the new conversation ID if it was created
+    return {"reply": assistant_reply, "conversation_id": conversation_id}
 
 @app.get("/debug/redis/{user_id}")
 def debug_redis_data(user_id: str):
