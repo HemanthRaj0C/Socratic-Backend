@@ -23,7 +23,7 @@ app = FastAPI()
 
 origins = [
     "http://localhost:3000",  # The default Next.js port
-    "https://socratic-ai-tutor.vercel.app/" # deployed frontend URL
+    "https://socratic-ai-tutor.vercel.app" # deployed frontend URL
 ]
 app.add_middleware(
     CORSMiddleware,
