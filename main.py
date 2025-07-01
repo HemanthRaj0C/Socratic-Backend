@@ -88,7 +88,7 @@ async def get_ai_reply_with_failover(history: List[Dict[str, str]]) -> Dict[str,
     async def call_api(url: str):
         return await loop.run_in_executor(
             None,
-            lambda: requests.post(f"{url}/generate", json={"history": history}, timeout=180)
+            lambda: requests.post(f"{url}/generate", json={"history": history}, timeout=600)
         )
 
     # 1. Try Colab (Fast GPU)
@@ -123,28 +123,36 @@ async def health_check():
     """Checks the status of the AI services for the frontend to display."""
     print(f"🏥 Health check requested - COLAB_URL: {COLAB_API_URL}, HF_URL: {HF_API_URL}")
     
-    # Check Colab service
+    # Check both services
     is_colab_up = await check_service_health(COLAB_API_URL)
-    if is_colab_up:
-        print("✅ Colab service is UP")
-        return {"status": "online", "service": "colab_gpu", "chat_enabled": True}
-
-    # Check HF service  
     is_hf_up = await check_service_health(HF_API_URL)
-    if is_hf_up:
-        print("🟡 HF service is UP")
-        return {"status": "slow", "service": "hf_cpu_slow", "chat_enabled": True}
-
-    # If both services are down, provide more details
-    colab_status = "not_configured" if not COLAB_API_URL else "offline"
-    hf_status = "not_configured" if not HF_API_URL else "offline"
     
-    print("❌ Both services are DOWN")
+    # Determine service statuses
+    colab_status = "not_configured" if not COLAB_API_URL else ("online" if is_colab_up else "offline")
+    hf_status = "not_configured" if not HF_API_URL else ("online" if is_hf_up else "offline")
+    
+    # Determine overall status and primary service
+    if is_colab_up:
+        print("✅ Colab service is UP - using as primary")
+        primary_service = "colab_gpu"
+        overall_status = "online"
+        chat_enabled = True
+    elif is_hf_up:
+        print("🟡 HF service is UP - using as fallback")
+        primary_service = "hf_cpu_slow"
+        overall_status = "slow"
+        chat_enabled = True
+    else:
+        print("❌ Both services are DOWN")
+        primary_service = "none"
+        overall_status = "offline"
+        chat_enabled = False
+    
     return {
-        "status": "offline", 
-        "service": "none",
-        "chat_enabled": False,
-        "details": {
+        "status": overall_status,
+        "service": primary_service,
+        "chat_enabled": chat_enabled,
+        "services": {
             "colab": colab_status,
             "huggingface": hf_status
         }
