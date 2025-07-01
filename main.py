@@ -88,7 +88,7 @@ async def get_ai_reply_with_failover(history: List[Dict[str, str]]) -> Dict[str,
     async def call_api(url: str):
         return await loop.run_in_executor(
             None,
-            lambda: requests.post(f"{url}/generate", json={"history": history}, timeout=600)
+            lambda: requests.post(f"{url}/generate", json={"history": history}, timeout=1000)
         )
 
     # 1. Try Colab (Fast GPU)
