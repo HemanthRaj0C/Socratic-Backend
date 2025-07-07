@@ -1,0 +1,24 @@
+name: Ping Render Service
+
+on:
+  schedule:
+    # Run every 5 minutes to account for GitHub delays
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Smart ping with backoff
+        run: |
+          # Try multiple times with delays
+          for i in {1..3}; do
+            if curl --fail --max-time 10 "${{ secrets.RENDER_URL }}"; then
+              echo "Ping successful on attempt $i"
+              break
+            else
+              echo "Ping failed on attempt $i, retrying..."
+              sleep 30
+            fi
+          done
