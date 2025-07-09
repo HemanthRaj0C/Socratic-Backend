@@ -304,6 +304,67 @@ async def create_payment_order(request: CreateOrderRequest, user_id: str = Depen
     except Exception as e:
         print(f"❌ Order creation failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to create order: {str(e)}")
+    
+@app.post("/verify-payment")
+async def verify_payment(request: dict, user_id: str = Depends(get_current_user)):
+    """Manually verify a payment and update order status."""
+    try:
+        payment_id = request.get('payment_id')
+        order_id = request.get('order_id')
+        
+        if not payment_id or not order_id:
+            raise HTTPException(status_code=400, detail="Payment ID and Order ID required")
+        
+        # Verify payment with Razorpay
+        if razorpay_client:
+            try:
+                payment = razorpay_client.payment.fetch(payment_id)
+                if payment['status'] == 'captured' and payment['order_id'] == order_id:
+                    # Update order status in Firebase
+                    order_ref = fb.db.collection('users').document(user_id).collection('orders').document(order_id)
+                    order_doc = order_ref.get()
+                    
+                    if order_doc.exists:
+                        order_ref.update({
+                            "status": "paid",
+                            "paymentId": payment_id,
+                            "paidAt": firestore.SERVER_TIMESTAMP,
+                            "paymentDetails": payment
+                        })
+                        
+                        # Create payment record
+                        payment_ref = fb.db.collection('users').document(user_id).collection('payments').document(payment_id)
+                        payment_record = {
+                            "paymentId": payment_id,
+                            "orderId": order_id,
+                            "amount": payment.get('amount', 0) / 100,
+                            "status": "captured",
+                            "method": payment.get('method'),
+                            "capturedAt": firestore.SERVER_TIMESTAMP,
+                            "razorpayDetails": payment
+                        }
+                        payment_ref.set(payment_record)
+                        
+                        return {"success": True, "message": "Payment verified and order updated"}
+                    else:
+                        raise HTTPException(status_code=404, detail="Order not found")
+                else:
+                    raise HTTPException(status_code=400, detail="Payment not captured or order mismatch")
+            except Exception as e:
+                print(f"Razorpay verification error: {e}")
+                raise HTTPException(status_code=500, detail="Payment verification failed")
+        else:
+            # Mock verification for development
+            order_ref = fb.db.collection('users').document(user_id).collection('orders').document(order_id)
+            order_ref.update({
+                "status": "paid",
+                "paymentId": payment_id,
+                "paidAt": firestore.SERVER_TIMESTAMP
+            })
+            return {"success": True, "message": "Payment verified (mock mode)"}
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/webhook/razorpay")
 async def handle_razorpay_webhook(request: Request):
