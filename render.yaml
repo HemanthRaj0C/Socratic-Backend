@@ -1,26 +1,20 @@
-# render.yaml
-# This blueprint defines two services that will be deployed from this repository.
+# render.yaml (Simplified for a Single "Combined" Service on the Free Tier)
 
 services:
-  # Service 1: The FastAPI Web Server (Your "Front of House")
+  # We only define one service that does both jobs.
   - type: web
-    name: socratic-tutor-api
+    name: socratic-tutor-combined-api # A new name to avoid conflict
     runtime: docker
-    repo: https://github.com/HemanthRaj0C/Socratic-Backend # IMPORTANT: Change this to your repo URL
-    dockerfilePath: ./Dockerfile
-    region: oregon # Or choose another region like frankfurt
-    plan: free # Or upgrade to "Starter" to prevent sleeping
+    repo: https://github.com/HemanthRaj0C/Socratic-Backend # Use your repo URL
+    region: oregon 
+    plan: free # This will now work
+    
+    # Set a health check path so Render knows your app is running
     healthCheckPath: /
-    envVars:
-      - fromGroup: socratic-tutor-secrets
-
-  # Service 2: The RQ Background Worker (Your "Back of House")
-  - type: worker
-    name: socratic-tutor-worker
-    runtime: docker
-    repo: https://github.com/HemanthRaj0C/Socratic-Backend # IMPORTANT: Change this to your repo URL
-    dockerfilePath: ./Dockerfile.worker
-    region: oregon
-    plan: free
+    
+    # Point to your existing Dockerfile
+    dockerfilePath: ./Dockerfile
+    
+    # Link the environment group with all your secrets
     envVars:
       - fromGroup: socratic-tutor-secrets

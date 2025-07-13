@@ -26,9 +26,12 @@ import vector_store # Our new module
 import firebase_config as fb
 import redis_cache
 
+from contextlib import asynccontextmanager
+import threading
+import subprocess
+
 # Load environment variables from .env file
 load_dotenv()
-app = FastAPI()
 
 # --- CORS Middleware Configuration ---
 # Add your deployed Vercel URL and local development URLs
@@ -36,14 +39,6 @@ origins = [
     "http://localhost:3000",
     "https://socratic-ai-tutor.vercel.app" # Your deployed frontend URL
 ]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # --- Load API URLs from Environment Variables ---
 COLAB_API_URL = os.getenv("COLAB_AI_API_URL")
@@ -158,6 +153,49 @@ async def get_ai_reply_with_failover(history: List[Dict[str, str]]) -> Dict[str,
     print("❌ CRITICAL: Both AI model services are offline.")
     raise HTTPException(status_code=503, detail="All AI model services are currently unavailable.")
 
+def run_rq_worker():
+    """
+    This function will be run in a separate thread. It starts the RQ worker
+    as a command-line process.
+    """
+    redis_url = os.getenv("UPSTASH_REDIS_URL_FOR_RQ")
+    if not redis_url:
+        print("🔴 CRITICAL: UPSTASH_REDIS_URL_FOR_RQ not set. Worker cannot start.")
+        return
+    print("🚀 Starting RQ background worker in a separate thread...")
+    try:
+        # Using shell=True can sometimes help with pathing issues inside containers for commands like this
+        subprocess.run(f"rq worker --url {redis_url} socratic-memories", shell=True, check=True)
+    except Exception as e:
+        print(f"💥 Background worker crashed: {e}")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # This code runs ONCE, when the application starts up.
+    print("✨ Application startup: Initializing background worker...")
+    
+    # Create and start the background thread for the RQ worker
+    worker_thread = threading.Thread(target=run_rq_worker, daemon=True)
+    worker_thread.start()
+    print("✅ Background worker thread has been started.")
+    
+    # The 'yield' keyword is where the application runs.
+    # The code before yield is for startup.
+    yield
+    # The code after yield is for shutdown (if you need it).
+    print("🌙 Application shutdown.")
+
+
+# --- Initialize the FastAPI app and connect the lifespan manager ---
+app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- API Endpoints ---
 
