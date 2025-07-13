@@ -8,7 +8,7 @@ services:
     runtime: docker
     repo: https://github.com/HemanthRaj0C/Socratic-Backend # IMPORTANT: Change this to your repo URL
     dockerfilePath: ./Dockerfile
-    region: singapore
+    region: oregon # Or choose another region like frankfurt
     plan: free # Or upgrade to "Starter" to prevent sleeping
     healthCheckPath: /
     envVars:
@@ -20,7 +20,7 @@ services:
     runtime: docker
     repo: https://github.com/HemanthRaj0C/Socratic-Backend # IMPORTANT: Change this to your repo URL
     dockerfilePath: ./Dockerfile.worker
-    region: singapore
+    region: oregon
     plan: free
     envVars:
       - fromGroup: socratic-tutor-secrets
