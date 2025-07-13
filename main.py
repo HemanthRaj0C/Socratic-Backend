@@ -21,6 +21,7 @@ from redis import Redis
 from rq import Queue
 import embedding # Our new module
 import vector_store # Our new module
+from sentence_transformers import SentenceTransformer # <-- NEW IMPORT
 
 # Import our custom modules
 import firebase_config as fb

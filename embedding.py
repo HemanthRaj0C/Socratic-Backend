@@ -1,23 +1,35 @@
-# embedding.py
-from sentence_transformers import SentenceTransformer
-import torch
+# embedding.py (in your local socratic-tutor-backend project)
+import os
+import requests
 
-# This function loads the model ONCE and re-uses it.
-# It's a small model, so it can run on the CPU.
-def load_embedding_model():
-    """Loads the SentenceTransformer model."""
-    print("🚀 Loading embedding model (sentence-transformers)...")
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = SentenceTransformer('all-MiniLM-L6-v2', device=device)
-    print(f"✅ Embedding model loaded successfully on '{device}'.")
-    return model
-
-# Global variable to hold our loaded model
-EMBEDDING_MODEL = load_embedding_model()
+# This line reads the new URL from your .env file
+HF_EMBEDDER_API_URL = os.getenv("HF_EMBEDDER_API_URL")
 
 def create_embedding(text: str):
-    """Creates a vector embedding for a given text chunk."""
-    if not text or not isinstance(text, str):
+    """
+    Creates a vector embedding by calling our dedicated /embed endpoint
+    on the Hugging Face Space.
+    """
+    if not text or not isinstance(text, str) or not HF_EMBEDDER_API_URL:
+        print("⚠️ create_embedding called but HF_EMBEDDER_API_URL is not configured.")
         return None
-    # The .encode() method creates the embedding
-    return EMBEDDING_MODEL.encode(text).tolist()
+    
+    # It constructs the full endpoint URL correctly
+    embed_endpoint = f"{HF_EMBEDDER_API_URL}/embed"
+    
+    try:
+        print(f"🧠 Calling Embedding Server at {embed_endpoint}...")
+        response = requests.post(embed_endpoint, json={"text_chunk": text}, timeout=30)
+        response.raise_for_status()
+        
+        embedding = response.json().get("embedding")
+        if embedding:
+            print("✅ Embedding created successfully via API.")
+            return embedding
+        else:
+            print(f"❌ API returned success but no embedding. Response: {response.json()}")
+            return None
+        
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Calling our /embed endpoint failed: {e}")
+        return None
