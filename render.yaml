@@ -7,24 +7,20 @@ services:
     name: socratic-tutor-api
     runtime: docker
     repo: https://github.com/HemanthRaj0C/Socratic-Backend # IMPORTANT: Change this to your repo URL
+    dockerfilePath: ./Dockerfile
     region: oregon # Or choose another region like frankfurt
     plan: free # Or upgrade to "Starter" to prevent sleeping
     healthCheckPath: /
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.8
-      - fromGroup: socratic-tutor-secrets # We will create this group in the Render dashboard
+      - fromGroup: socratic-tutor-secrets
 
   # Service 2: The RQ Background Worker (Your "Back of House")
   - type: worker
     name: socratic-tutor-worker
     runtime: docker
     repo: https://github.com/HemanthRaj0C/Socratic-Backend # IMPORTANT: Change this to your repo URL
+    dockerfilePath: ./Dockerfile.worker
     region: oregon
     plan: free
-    # This command overrides the CMD in the Dockerfile
-    startCommand: rq worker --url $UPSTASH_REDIS_URL_FOR_RQ socratic-memories
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.8
       - fromGroup: socratic-tutor-secrets
