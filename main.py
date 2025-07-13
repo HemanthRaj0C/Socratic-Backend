@@ -16,6 +16,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from firebase_admin import firestore
 from uuid import uuid4
 import razorpay
+# --- NEW IMPORTS ---
+from redis import Redis
+from rq import Queue
+import embedding # Our new module
+import vector_store # Our new module
 
 # Import our custom modules
 import firebase_config as fb
@@ -56,6 +61,14 @@ if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
         razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
     except Exception as e:
         print(f"Warning: Could not initialize Razorpay client: {e}")
+
+try:
+    redis_conn = Redis.from_url(os.getenv("UPSTASH_REDIS_URL_FOR_RQ", os.getenv("UPSTASH_REDIS_URL")))
+    q = Queue('socratic-memories', connection=redis_conn)
+    print("✅ Redis Queue (RQ) connected successfully.")
+except Exception as e:
+    print(f"❌ Could not connect to Redis Queue: {e}")
+    q = None
 
 # --- Pydantic Models for Data Validation ---
 class ChatMessage(BaseModel):
@@ -253,7 +266,91 @@ async def handle_chat(request: ChatRequest, user_id: str = Depends(get_current_u
 
     redis_cache.set_chat_history(f"{user_id}:{conversation_id}", history)
 
+    # --- NEW: Enqueue a background job to store this memory ---
+    if q:
+        new_message_content = request.messages[0].dict()['content']
+        memory_chunk = f"User: {new_message_content}\nAssistant: {assistant_reply_content}"
+        
+        # This is a non-blocking call. It adds the job and returns instantly.
+        q.enqueue(vector_store.add_memory_chunk, user_id, memory_chunk, conversation_id)
+        print(f"📩 Enqueued memory storage job for user {user_id}")
+
+    # Return the response to the user immediately
     return {"reply": assistant_reply_content, "source": ai_response["source"], "conversation_id": conversation_id}
+
+# --- NEW /suggest-holistic-project Endpoint ---
+@app.post("/suggest-holistic-project")
+async def suggest_project(user_id: str = Depends(get_current_user)):
+    """Analyzes all user history to suggest a single, cohesive project."""
+    
+    # 1. Get the user's entire history from Firestore to find key topics
+    # (A simpler approach for now instead of multiple AI calls)
+    all_messages = []
+    convos_ref = fb.db.collection('users').document(user_id).collection('conversations').stream()
+    for convo in convos_ref:
+        all_messages.extend(convo.to_dict().get('messages', []))
+
+    if not all_messages:
+        raise HTTPException(status_code=404, detail="No conversation history found to generate a project from.")
+
+    # We'll use the last ~2000 characters as context to find key topics
+    recent_history_text = " ".join([msg['content'] for msg in all_messages[-20:]])
+
+    # 2. Use the AI to synthesize key topics from recent history
+    topic_synthesis_prompt = f"""
+    Analyze the following conversation text and list the top 3-5 main technical concepts or topics being discussed.
+    Your response should be a single JSON object with a key "topics" containing a list of strings.
+    
+    CONVERSATION TEXT:
+    "{recent_history_text[:2000]}"
+    """
+    
+    # We call the AI just to get the topics
+    try:
+        topic_response = await get_ai_reply_with_failover([{"role": "user", "content": topic_synthesis_prompt}])
+        topics = json.loads(topic_response['reply']).get('topics', [])
+    except Exception as e:
+        print(f"⚠️ Could not synthesize topics, creating a generic project. Error: {e}")
+        topics = ["General Problem Solving"]
+
+    if not topics:
+        topics = ["General Problem Solving"]
+
+    print(f"Identified user topics: {topics}")
+
+    # 3. For each topic, retrieve relevant memories from the Vector DB
+    all_relevant_memories = []
+    for topic in topics:
+        memories = vector_store.find_relevant_memories(user_id, topic, top_k=3)
+        all_relevant_memories.extend(memories)
+    
+    # Remove duplicates
+    unique_memories_text = "\n".join(list(set(all_relevant_memories)))
+
+    # 4. Construct the final "Mega-Prompt" to generate the project
+    mega_prompt = f"""
+    You are an expert career mentor. Based on the user's key interests and excerpts from their learning history,
+    design a single, cohesive 'capstone' project that combines these skills.
+    
+    KEY INTERESTS: {', '.join(topics)}
+    
+    RELEVANT EXCERPTS FROM USER'S HISTORY:
+    {unique_memories_text[:3000]}
+    
+    YOUR TASK:
+    Generate a detailed project plan. The output must be a single JSON object with the keys:
+    "project_title", "project_description", "key_features" (a list of strings), 
+    and "skills_reinforced" (a list of strings).
+    """
+
+    final_project_response = await get_ai_reply_with_failover([{"role": "user", "content": mega_prompt}])
+
+    try:
+        # Return the final JSON project plan
+        return json.loads(final_project_response['reply'])
+    except:
+        # Fallback if the AI didn't return perfect JSON
+        return {"project_title": "Custom Project Idea", "project_description": final_project_response['reply'], "key_features": [], "skills_reinforced": topics}
 
 # --- Payment Endpoints ---
 # ToDo - Implement Razorpay payment endpoints for creating orders, verifying payments, and handling webhooks.
