@@ -11,6 +11,5 @@ cryptography
 redis
 # --- NEW LIBRARIES TO ADD ---
 pinecone
-sentence-transformers
 redis
 rq # Redis Queue for background tasks
