@@ -1,32 +1,32 @@
-name: Ping Render Service
+# name: Ping Render Service
 
-on:
-  schedule:
-    - cron: "*/5 * * * *"
-  workflow_dispatch:
+# on:
+#   schedule:
+#     - cron: "*/5 * * * *"
+#   workflow_dispatch:
 
-jobs:
-  ping:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30 # GitHub Actions timeout after 30 minutes
-    steps:
-      - name: Ping until success
-        run: |
-          ATTEMPT=1
+# jobs:
+#   ping:
+#     runs-on: ubuntu-latest
+#     timeout-minutes: 30 # GitHub Actions timeout after 30 minutes
+#     steps:
+#       - name: Ping until success
+#         run: |
+#           ATTEMPT=1
 
-          while true; do
-            echo "Attempt $ATTEMPT - $(date)"
+#           while true; do
+#             echo "Attempt $ATTEMPT - $(date)"
             
-            HTTP_CODE=$(curl --silent --max-time 30 -w "%{http_code}" -o /dev/null "${{ secrets.RENDER_URL }}" || echo "000")
+#             HTTP_CODE=$(curl --silent --max-time 30 -w "%{http_code}" -o /dev/null "${{ secrets.RENDER_URL }}" || echo "000")
             
-            if [ "$HTTP_CODE" = "200" ]; then
-              echo "✅ Success! Got HTTP 200 on attempt $ATTEMPT"
-              break
-            else
-              echo "❌ Failed with HTTP code: $HTTP_CODE"
-              echo "Waiting 60 seconds before retry..."
-              sleep 60
-            fi
+#             if [ "$HTTP_CODE" = "200" ]; then
+#               echo "✅ Success! Got HTTP 200 on attempt $ATTEMPT"
+#               break
+#             else
+#               echo "❌ Failed with HTTP code: $HTTP_CODE"
+#               echo "Waiting 60 seconds before retry..."
+#               sleep 60
+#             fi
             
-            ATTEMPT=$((ATTEMPT + 1))
-          done
+#             ATTEMPT=$((ATTEMPT + 1))
+#           done
